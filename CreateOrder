@@ -1,0 +1,181 @@
+public Boolean createOrder(CreateOrderDTO createOrderDTO, String username, String id) {
+
+		System.out.println("debugger");
+		MasterBOModel bo = boRepository.findByPhoneNumber(username);
+		MasterCustomerModel customerModel = masterCustomerListRepository.findById(id).orElse(null);
+		System.out.println(customerModel.toString());
+
+		if (bo == null) {
+			throw new UserNotFoundException("No user found with the email: " + username);
+		}
+
+		StockOutTransactionModel stockOutTransactionModel = new StockOutTransactionModel();
+
+		List<Double> emptyWeight = new ArrayList<Double>();
+		List<Double> loadWeight = new ArrayList<Double>();
+		List<Integer> jalsBox = new ArrayList<Integer>();
+
+		stockOutTransactionModel.setDateTime(LocalDateTime.now());
+		stockOutTransactionModel.setCustName(createOrderDTO.getOwnerName());
+		stockOutTransactionModel.setStockType(ItemEnum.valueOf(createOrderDTO.getItem().toUpperCase()));
+		// stockOutTransactionModel.setNumberOfCages(createOrderDTO.getNumberOfCages());
+		stockOutTransactionModel.setNumberOfBirds(createOrderDTO.getBirds());
+		stockOutTransactionModel.setEmpID(null);
+
+		Map<NumberOfCagesEnum, Integer> map = new HashMap<>();
+		if (createOrderDTO.getCageType() != null) {
+			map.put(createOrderDTO.getCageType(), createOrderDTO.getTotalJals());
+		} else {
+			throw new IllegalArgumentException("Cage type must not be null.");
+		}
+
+		if (customerModel != null) {
+			stockOutTransactionModel.setCustUUID(customerModel);
+		} else {
+			throw new UserNotFoundException("Customer not found with ID: " + id);
+		}
+
+		Double netWeight = 0.0;
+		// Check if empty weight is null
+		boolean isEmptyWeight = createOrderDTO.getEmptyWeights() == null;
+
+		// Calculate totals for Jals, Load Weight, and Empty Weight
+		Integer totalJals = 0;
+		Double totalLoadWeight = 0.0;
+		Double totalEmptyWeight = 0.0;
+
+		for (int i = 0; i < createOrderDTO.getJalsBoxes().size(); i++) {
+			jalsBox.add(createOrderDTO.getJalsBoxes().get(i));
+			totalJals += jalsBox.get(i);
+		}
+		stockOutTransactionModel.setJalsBox(jalsBox);
+
+		for (int i = 0; i < createOrderDTO.getLoadWeights().size(); i++) {
+			loadWeight.add(createOrderDTO.getLoadWeights().get(i));
+			totalLoadWeight += loadWeight.get(i);
+		}
+		stockOutTransactionModel.setLoadWeight(loadWeight);
+
+		for (int i = 0; i < createOrderDTO.getEmptyWeights().size(); i++) {
+			emptyWeight.add(createOrderDTO.getEmptyWeights().get(i));
+			totalEmptyWeight += emptyWeight.get(i);
+		}
+		stockOutTransactionModel.setEmptyWeight(emptyWeight);
+		stockOutTransactionModel.setTotalBoxes(totalJals);
+		stockOutTransactionModel.setTotalLoadWeight(totalLoadWeight);
+		stockOutTransactionModel.setTotalEmptyWeight(totalEmptyWeight);
+
+		if (isEmptyWeight) {
+			netWeight = 0.0; // Default net weight to 0
+		} else {
+			netWeight = totalLoadWeight - totalEmptyWeight;
+		}
+		// createOrderDTO.setNetWeight(netWeight);
+		stockOutTransactionModel.setNetWeight(netWeight);
+
+		stockOutTransactionModel.setRemarks(createOrderDTO.getRemarks());
+		stockOutTransactionModel.setMasterBoId(bo);
+
+		// Update MasterBoStockModel for the particular BO
+		MasterBoStockModel masterBoStockModel = boStockRepository.findByBoId(bo)
+				.orElseThrow(() -> new RuntimeException("BO Stock not found for Name: " + bo.getCustomerName()));
+
+		// Construct warehouse key
+		String warehouseKey = "Default_Warehouse_" + bo.getCustomerName();
+
+		// Validate warehouse entry exists
+		WareHouseEntry wareHouseEntry1 = masterBoStockModel.getWareHouse().get(warehouseKey);
+		if (wareHouseEntry1 == null) {
+			throw new RuntimeException("Warehouse entry not found for BO: " + bo.getBoId());
+		}
+
+		ItemEnum item = stockOutTransactionModel.getStockType();
+		Double currentStock = wareHouseEntry1.getItems().getOrDefault(item, 0.0);
+
+		// Validate sufficient stock in BO's warehouse
+		if (currentStock < netWeight) {
+			throw new RuntimeException("Insufficient stock for BO: " + bo.getCustomerName());
+		}
+
+		// Fetch central warehouse stock before making changes
+		WareHouseEntry centralWarehouseEntry = warehouseRepository.findByItemsAndWarehouseId(item,
+				wareHouseEntry1.getWarehouseEntryId());
+		if (centralWarehouseEntry == null) {
+			throw new RuntimeException("Warehouse entry not found for item: " + item);
+		}
+		Double warehouseStock = centralWarehouseEntry.getItems().getOrDefault(item, 0.0);
+
+		// Validate sufficient stock in central warehouse
+		if (warehouseStock < netWeight) {
+			throw new RuntimeException("Insufficient warehouse stock for item: " + item);
+		}
+
+		// Now that both have enough stock, update them atomically
+		wareHouseEntry1.getItems().put(item, currentStock - netWeight);
+		centralWarehouseEntry.getItems().put(item, warehouseStock - netWeight);
+
+		// Persist changes
+
+		warehouseRepository.save(centralWarehouseEntry);
+		boStockRepository.save(masterBoStockModel);
+
+		stockOutTransactionModel.setBoStockUUID(masterBoStockModel);
+
+		Double price = masterBoStockModel.getBillingRate()
+				.getOrDefault(ItemEnum.valueOf(createOrderDTO.getItem().toUpperCase()), 0.0);
+		stockOutTransactionModel.setPrice(price);
+		stockOutTransactionModel.setBillingRate(price);
+
+		Double billAmount = price * netWeight;
+		stockOutTransactionModel.setBillAmount(billAmount);
+
+
+
+		StockOutTransactionModel outTransactionModel = stockOutTransactionRepository.save(stockOutTransactionModel);
+
+		OutConsolidatedTransactionModel outConsolidatedTransactionModel = saveOutConsolidatedTransactionModel(
+				stockOutTransactionModel);
+
+		StockOutConsolidatedTransactionModel stockOutConsolidatedTransactionModel = new StockOutConsolidatedTransactionModel();
+		stockOutConsolidatedTransactionModel.setBoStockUUID(masterBoStockModel);
+		stockOutConsolidatedTransactionModel.setBoId(stockOutTransactionModel.getMasterBoId());
+
+		Map<LocalDateTime, OutConsolidatedTransactionModel> consolidatedTransactionModel = new HashMap<>();
+		consolidatedTransactionModel.put(stockOutTransactionModel.getDateTime(), outConsolidatedTransactionModel);
+
+		stockOutConsolidatedTransactionModel.setConsolidatedTransactionModel(consolidatedTransactionModel);
+		stockOutConsolidatedTransactionRepository.save(stockOutConsolidatedTransactionModel);
+
+		CustTransactionModel custTransactionModel = new CustTransactionModel();
+		custTransactionModel.setStockOutTransactionUUID(stockOutTransactionModel);
+		custTransactionModel.setDateTime(LocalDateTime.now());
+		custTransactionModel.setBillAmount(outTransactionModel.getBillAmount());
+		custTransactionModel.setFullPaidFlag(false);
+		custTransactionModel.setMasterCustTransaction(bo);
+		custTransactionModel.setCustTransaction(customerModel);
+		custTransactionRepository.save(custTransactionModel);
+
+		EmployeeOutTransactionModel employeeInTransactionModel = new EmployeeOutTransactionModel();
+		employeeInTransactionModel.setBoId(bo);
+		employeeInTransactionModel.setCustId(customerModel);
+		employeeInTransactionModel.setDateTime(LocalDateTime.now());
+		// employeeInTransactionModel.setMasterEmployee(null);
+		employeeInTransactionModel.setTransactionTypeEnum(null);
+		employeeOutTransactionRepository.save(employeeInTransactionModel);
+		return true;
+	}
+
+	private OutConsolidatedTransactionModel saveOutConsolidatedTransactionModel(
+			StockOutTransactionModel stockOutTransactionModel) {
+		OutConsolidatedTransactionModel outConsolidatedTransactionModel = new OutConsolidatedTransactionModel();
+		outConsolidatedTransactionModel.setStockType(stockOutTransactionModel.getStockType());
+		outConsolidatedTransactionModel.setEmptyLoad(stockOutTransactionModel.getTotalEmptyWeight());
+		outConsolidatedTransactionModel.setLoadWeight(stockOutTransactionModel.getTotalLoadWeight());
+		outConsolidatedTransactionModel.setNetWeight(stockOutTransactionModel.getNetWeight());
+		// inConsolidatedTransactionModel.setNumberOfCages(stockInTransactionModel.getNumberOfCages());
+		outConsolidatedTransactionModel.setNoOfBirds(stockOutTransactionModel.getNumberOfBirds());
+		outConsolidatedTransactionModel.setBillAmount(stockOutTransactionModel.getBillAmount());
+		outConsolidatedTransactionModel.setBoardRate(stockOutTransactionModel.getBordRate());
+		outConsolidatedTransactionModel.setBillingRate(stockOutTransactionModel.getBillingRate());
+		return outConsolidatedTransactionRepository.save(outConsolidatedTransactionModel);
+	}
