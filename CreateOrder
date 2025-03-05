@@ -3,6 +3,7 @@ public Boolean createOrder(CreateOrderDTO createOrderDTO, String username, Strin
 		System.out.println("debugger");
 		MasterBOModel bo = boRepository.findByPhoneNumber(username);
 		MasterCustomerModel customerModel = masterCustomerListRepository.findById(id).orElse(null);
+
 		System.out.println(customerModel.toString());
 
 		if (bo == null) {
@@ -31,10 +32,7 @@ public Boolean createOrder(CreateOrderDTO createOrderDTO, String username, Strin
 
 		if (customerModel != null) {
 			stockOutTransactionModel.setCustUUID(customerModel);
-		} else {
-			throw new UserNotFoundException("Customer not found with ID: " + id);
 		}
-
 		Double netWeight = 0.0;
 		// Check if empty weight is null
 		boolean isEmptyWeight = createOrderDTO.getEmptyWeights() == null;
@@ -119,17 +117,15 @@ public Boolean createOrder(CreateOrderDTO createOrderDTO, String username, Strin
 		warehouseRepository.save(centralWarehouseEntry);
 		boStockRepository.save(masterBoStockModel);
 
-		stockOutTransactionModel.setBoStockUUID(masterBoStockModel);
+		// stockOutTransactionModel.setBoStockUUID(masterBoStockModel);
 
-		Double price = masterBoStockModel.getBillingRate()
-				.getOrDefault(ItemEnum.valueOf(createOrderDTO.getItem().toUpperCase()), 0.0);
-		stockOutTransactionModel.setPrice(price);
-		stockOutTransactionModel.setBillingRate(price);
-
-		Double billAmount = price * netWeight;
-		stockOutTransactionModel.setBillAmount(billAmount);
-
-
+		// Double price = masterBoStockModel.getBillingRate()
+		// .getOrDefault(ItemEnum.valueOf(createOrderDTO.getItem().toUpperCase()), 0.0);
+//		stockOutTransactionModel.setPrice(price);
+//		stockOutTransactionModel.setBillingRate(price);
+//
+//		Double billAmount = price * netWeight;
+//		stockOutTransactionModel.setBillAmount(billAmount);
 
 		StockOutTransactionModel outTransactionModel = stockOutTransactionRepository.save(stockOutTransactionModel);
 
@@ -137,7 +133,7 @@ public Boolean createOrder(CreateOrderDTO createOrderDTO, String username, Strin
 				stockOutTransactionModel);
 
 		StockOutConsolidatedTransactionModel stockOutConsolidatedTransactionModel = new StockOutConsolidatedTransactionModel();
-		stockOutConsolidatedTransactionModel.setBoStockUUID(masterBoStockModel);
+		// stockOutConsolidatedTransactionModel.setBoStockUUID(masterBoStockModel);
 		stockOutConsolidatedTransactionModel.setBoId(stockOutTransactionModel.getMasterBoId());
 
 		Map<LocalDateTime, OutConsolidatedTransactionModel> consolidatedTransactionModel = new HashMap<>();
@@ -147,11 +143,11 @@ public Boolean createOrder(CreateOrderDTO createOrderDTO, String username, Strin
 		stockOutConsolidatedTransactionRepository.save(stockOutConsolidatedTransactionModel);
 
 		CustTransactionModel custTransactionModel = new CustTransactionModel();
-		custTransactionModel.setStockOutTransactionUUID(stockOutTransactionModel);
 		custTransactionModel.setDateTime(LocalDateTime.now());
 		custTransactionModel.setBillAmount(outTransactionModel.getBillAmount());
 		custTransactionModel.setFullPaidFlag(false);
 		custTransactionModel.setMasterCustTransaction(bo);
+		custTransactionModel.setStockOutTransactionUUID(stockOutTransactionModel);
 		custTransactionModel.setCustTransaction(customerModel);
 		custTransactionRepository.save(custTransactionModel);
 
@@ -165,7 +161,8 @@ public Boolean createOrder(CreateOrderDTO createOrderDTO, String username, Strin
 		return true;
 	}
 
-	private OutConsolidatedTransactionModel saveOutConsolidatedTransactionModel(
+
+private OutConsolidatedTransactionModel saveOutConsolidatedTransactionModel(
 			StockOutTransactionModel stockOutTransactionModel) {
 		OutConsolidatedTransactionModel outConsolidatedTransactionModel = new OutConsolidatedTransactionModel();
 		outConsolidatedTransactionModel.setStockType(stockOutTransactionModel.getStockType());
